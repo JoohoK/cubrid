@@ -611,7 +611,12 @@ createdb (UTIL_FUNCTION_ARG * arg)
     }
 
   sm_mark_system_classes ();
-
+/*
+  if (boot_create_dual_class() != NO_ERROR)
+  {
+    goto error_exit;
+  }
+  */
   (void) lang_db_put_charset ();
 
   tzd = tz_get_data ();

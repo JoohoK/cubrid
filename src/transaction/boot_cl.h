@@ -58,6 +58,7 @@ extern int boot_shutdown_client (bool iserfinal);
 extern void boot_donot_shutdown_client_at_exit (void);
 extern void boot_server_die_or_changed (void);
 extern void boot_client_all_finalize (bool iserfinal);
+//extern int boot_create_dual_class (void);
 #if defined(CS_MODE)
 extern char *boot_get_host_connected (void);
 extern HA_SERVER_STATE boot_get_ha_server_state (void);

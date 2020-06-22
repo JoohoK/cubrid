@@ -85,6 +85,7 @@
 #include "show_meta.h"
 #include "tz_support.h"
 #include "dbtype.h"
+#include "dbtype_def.h"
 #include "object_primitive.h"
 #include "connection_globals.h"
 
@@ -209,6 +210,7 @@ static int boot_define_view_stored_procedure_arguments (void);
 static int boot_define_view_db_collation (void);
 static int catcls_class_install (void);
 static int catcls_vclass_install (void);
+static int boot_create_dual_class (void);
 #if defined(CS_MODE)
 static int boot_check_locales (BOOT_CLIENT_CREDENTIAL * client_credential);
 #endif /* CS_MODE */
@@ -644,7 +646,16 @@ boot_initialize_client (BOOT_CLIENT_CREDENTIAL * client_credential, BOOT_DB_PATH
       (void) fprintf (stdout, format, rel_name ());
 #endif /* CS_MODE */
     }
-
+      /*
+       * create dual table 
+       */
+  
+  error_code = boot_create_dual_class();
+  if (error_code != NO_ERROR)
+  {
+    goto error_exit;  
+  }
+  
   if (db != NULL)
     {
       cfg_free_directory (db);
@@ -1796,6 +1807,105 @@ boot_client_initialize_css (DB_INFO * db, int client_type, bool check_capabiliti
   return (error);
 }
 #endif /* CS_MODE */
+
+/*
+ * Create a dual class which is used as a dummy table
+ */
+static int boot_create_dual_class ()
+{
+  SM_TEMPLATE *def;
+  int error_code = NO_ERROR;
+  MOP dual = NULL;
+  char insert_query[128] = {0};
+  int stmt_id = 0;
+  int save = 0;
+  DB_SESSION *session = NULL;
+
+  AU_DISABLE(save);
+
+  dual = db_create_class ("dual");
+  if(dual == NULL)
+  {
+    assert (er_errid () != NO_ERROR);
+    error_code = er_errid();
+    goto end; 
+  }
+  def = smt_edit_class_mop (dual, AU_ALTER);
+
+  error_code = smt_add_attribute (def, "dummy", "varchar(1)", NULL);
+  if (error_code != NO_ERROR)
+    {
+      goto end;
+    }
+ 
+  error_code = sm_update_class (def, NULL);
+  if (error_code != NO_ERROR)
+  {
+    goto end;
+  }
+  if (locator_has_heap (dual) == NULL)
+  {
+    assert (er_errid () != NO_ERROR);
+    error_code = er_errid();
+    goto end;
+  }
+  error_code = au_change_owner (dual, Au_dba_user);
+  if (error_code != NO_ERROR)
+    {
+      goto end;
+    }
+    
+  error_code = au_grant (Au_public_user, dual, AU_SELECT, false);
+  if (error_code != NO_ERROR)
+  {
+    goto end;
+  }
+
+  error_code = NO_ERROR;
+  
+  (void) snprintf (insert_query, sizeof (insert_query), "INSERT INTO DUAL VALUES ('X');");
+  
+  session = db_open_buffer (insert_query);
+  if (session == NULL) 
+  {
+    assert (er_errid () != NO_ERROR);
+    error_code = er_errid ();
+    goto end; 
+  }
+
+  if (db_get_errors (session) || db_statement_count (session) != 1)
+      {
+        assert (er_errid () != NO_ERROR);
+        error_code = er_errid ();
+        goto end;
+      }
+
+    stmt_id = db_compile_statement (session);
+    if (stmt_id != 1)
+      {
+        assert (er_errid () != NO_ERROR);
+        error_code = er_errid ();
+        goto end;
+      }
+
+    error_code = db_execute_statement_local (session, stmt_id, NULL);
+    if (error_code < 0)
+      {
+        goto end;
+      }
+  //sm_mark_system_class (dual, 0);
+  
+  end :
+    AU_ENABLE(save);
+
+    if (session != NULL)
+    {
+      db_free_query (session);
+      db_close_session (session);
+    }
+  
+   return error_code;
+}
 
 /*
  * boot_define_class :

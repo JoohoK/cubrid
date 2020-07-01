@@ -174,7 +174,8 @@ const char *AU_DBA_USER_NAME = "DBA";
          strcmp(name, CT_PASSWORD_NAME) == 0 || \
          strcmp(name, CT_AUTHORIZATION_NAME) == 0 || \
          strcmp(name, CT_AUTHORIZATIONS_NAME) == 0 || \
-	 strcmp(name, CT_CHARSET_NAME) == 0)
+	 strcmp(name, CT_CHARSET_NAME) == 0 || \
+   strcmp(name, CT_DUAL_NAME) == 0)
 
 enum fetch_by
 {
@@ -5827,7 +5828,7 @@ is_protected_class (MOP classmop, SM_CLASS * sm_class, DB_AUTH auth)
 {
   int illegal = 0;
 
-  if (classmop == Au_authorizations_class || IS_CATALOG_CLASS (sm_ch_name ((MOBJ) sm_class)) || strcmp(sm_ch_name ((MOBJ) sm_class), "dual") == 0)
+  if (classmop == Au_authorizations_class || IS_CATALOG_CLASS (sm_ch_name ((MOBJ) sm_class)))
     {
       illegal = auth & (AU_ALTER | AU_DELETE | AU_INSERT | AU_UPDATE | AU_INDEX);
     }

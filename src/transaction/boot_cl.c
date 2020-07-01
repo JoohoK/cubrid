@@ -191,6 +191,7 @@ static int boot_define_ha_apply_info (MOP class_mop);
 static int boot_define_collations (MOP class_mop);
 static int boot_add_charsets (MOP class_mop);
 static int boot_define_charsets (MOP class_mop);
+static int boot_define_dual(MOP class_mop);
 static int boot_define_view_class (void);
 static int boot_define_view_super_class (void);
 static int boot_define_view_vclass (void);
@@ -210,7 +211,6 @@ static int boot_define_view_stored_procedure_arguments (void);
 static int boot_define_view_db_collation (void);
 static int catcls_class_install (void);
 static int catcls_vclass_install (void);
-static int boot_create_dual_class (void);
 #if defined(CS_MODE)
 static int boot_check_locales (BOOT_CLIENT_CREDENTIAL * client_credential);
 #endif /* CS_MODE */
@@ -646,15 +646,6 @@ boot_initialize_client (BOOT_CLIENT_CREDENTIAL * client_credential, BOOT_DB_PATH
       (void) fprintf (stdout, format, rel_name ());
 #endif /* CS_MODE */
     }
-      /*
-       * create dual table 
-       */
-  
-  error_code = boot_create_dual_class();
-  if (error_code != NO_ERROR)
-  {
-    goto error_exit;  
-  }
   
   if (db != NULL)
     {
@@ -1807,105 +1798,6 @@ boot_client_initialize_css (DB_INFO * db, int client_type, bool check_capabiliti
   return (error);
 }
 #endif /* CS_MODE */
-
-/*
- * Create a dual class which is used as a dummy table
- */
-static int boot_create_dual_class ()
-{
-  SM_TEMPLATE *def;
-  int error_code = NO_ERROR;
-  MOP dual = NULL;
-  char insert_query[128] = {0};
-  int stmt_id = 0;
-  int save = 0;
-  DB_SESSION *session = NULL;
-
-  AU_DISABLE(save);
-
-  dual = db_create_class ("dual");
-  if(dual == NULL)
-  {
-    assert (er_errid () != NO_ERROR);
-    error_code = er_errid();
-    goto end; 
-  }
-  def = smt_edit_class_mop (dual, AU_ALTER);
-
-  error_code = smt_add_attribute (def, "dummy", "varchar(1)", NULL);
-  if (error_code != NO_ERROR)
-    {
-      goto end;
-    }
- 
-  error_code = sm_update_class (def, NULL);
-  if (error_code != NO_ERROR)
-  {
-    goto end;
-  }
-  if (locator_has_heap (dual) == NULL)
-  {
-    assert (er_errid () != NO_ERROR);
-    error_code = er_errid();
-    goto end;
-  }
-  error_code = au_change_owner (dual, Au_dba_user);
-  if (error_code != NO_ERROR)
-    {
-      goto end;
-    }
-    
-  error_code = au_grant (Au_public_user, dual, AU_SELECT, false);
-  if (error_code != NO_ERROR)
-  {
-    goto end;
-  }
-
-  error_code = NO_ERROR;
-  
-  (void) snprintf (insert_query, sizeof (insert_query), "INSERT INTO DUAL VALUES ('X');");
-  
-  session = db_open_buffer (insert_query);
-  if (session == NULL) 
-  {
-    assert (er_errid () != NO_ERROR);
-    error_code = er_errid ();
-    goto end; 
-  }
-
-  if (db_get_errors (session) || db_statement_count (session) != 1)
-      {
-        assert (er_errid () != NO_ERROR);
-        error_code = er_errid ();
-        goto end;
-      }
-
-    stmt_id = db_compile_statement (session);
-    if (stmt_id != 1)
-      {
-        assert (er_errid () != NO_ERROR);
-        error_code = er_errid ();
-        goto end;
-      }
-
-    error_code = db_execute_statement_local (session, stmt_id, NULL);
-    if (error_code < 0)
-      {
-        goto end;
-      }
-  //sm_mark_system_class (dual, 0);
-  
-  end :
-    AU_ENABLE(save);
-
-    if (session != NULL)
-    {
-      db_free_query (session);
-      db_close_session (session);
-    }
-  
-   return error_code;
-}
 
 /*
  * boot_define_class :
@@ -4049,6 +3941,68 @@ boot_define_charsets (MOP class_mop)
   return NO_ERROR;
 }
 
+#define CT_DUAL_DUMMY   "dummy"
+
+/*
+ * boot_define_dual :
+ *
+ * returns : NO_ERROR if all OK, ER_ status otherwise
+ *
+ *   class(IN) :
+ */
+
+static int boot_define_dual(MOP class_mop)
+{
+  SM_TEMPLATE *def;
+  int error_code = NO_ERROR;
+  DB_OBJECT* obj;
+  DB_VALUE val;
+  
+  def = smt_edit_class_mop (class_mop, AU_ALTER);
+
+  error_code = smt_add_attribute (def, CT_DUAL_DUMMY, "varchar(1)", NULL);
+  if (error_code != NO_ERROR)
+    {
+      return error_code;
+    }
+
+  error_code = sm_update_class (def, NULL);
+  if (error_code != NO_ERROR)
+    {
+      return error_code;
+    }
+
+  if (locator_has_heap (class_mop) == NULL)
+    {
+      assert (er_errid () != NO_ERROR);
+      return er_errid ();
+    }
+
+  error_code = au_change_owner (class_mop, Au_dba_user);
+  if (error_code != NO_ERROR)
+    {
+      return error_code;
+    }
+   
+  error_code = au_grant (Au_public_user, class_mop, AU_SELECT, false);
+  if (error_code != NO_ERROR)
+  {
+    return error_code;
+  }
+
+  obj = db_create_internal(class_mop);
+  if (obj == NULL)
+  {
+    assert (er_errid() != NO_ERROR);
+    return er_errid();
+  }
+  db_make_varchar(&val,1, "X", strlen ("X"), LANG_SYS_CODESET, LANG_SYS_COLLATION);
+  db_put_internal (obj, CT_DUAL_DUMMY, &val);
+/*if error occured? */
+
+  return NO_ERROR;
+}
+
 /*
  * catcls_class_install :
  *
@@ -4083,7 +4037,8 @@ catcls_class_install (void)
     {CT_SERIAL_NAME, boot_define_serial},
     {CT_HA_APPLY_INFO_NAME, boot_define_ha_apply_info},
     {CT_COLLATION_NAME, boot_define_collations},
-    {CT_CHARSET_NAME, boot_define_charsets}
+    {CT_CHARSET_NAME, boot_define_charsets},
+    {CT_DUAL_NAME, boot_define_dual}
   };
   // *INDENT-ON*
 

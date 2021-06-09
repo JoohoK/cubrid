@@ -11475,7 +11475,7 @@ log_reader (void *arg)
 	}
 
       /*when refined log info is queued, update log_Reader_info */
-      if (log_info_entry->length != 0)
+      if (log_info_entry->length != 0 && log_Reader_info.shutdown == false)
 	{
 	  LSA_COPY (&log_info_entry->start_lsa, &next_log_rec_lsa);
           /* *INDENT-OFF* */

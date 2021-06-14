@@ -2150,10 +2150,12 @@ log_append_undoredo_crumbs (THREAD_ENTRY * thread_p, LOG_RCVINDEX rcvindex, LOG_
       log_append_redo_crumbs (thread_p, rcvindex, addr, num_redo_crumbs, redo_crumbs);
       return;
     }
+
   if (LSA_ISNULL (&tdes->head_lsa) && prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
     {
       log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_TRAN_USER, LOG_USERNAME_MAX, tdes->client.get_db_user ());
     }
+
   /*
    * Now do the UNDO & REDO portion
    */

@@ -3327,11 +3327,12 @@ do_statement (PARSER_CONTEXT * parser, PT_NODE * statement)
 	      error = repl_error;
 	    }
 	}
-
+#if 0
       if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
 	{
 	  do_supplemental_statement (parser, statement);
 	}
+#endif 
     }
 
 end:
@@ -3759,11 +3760,12 @@ do_execute_statement (PARSER_CONTEXT * parser, PT_NODE * statement)
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_PT_UNKNOWN_STATEMENT, 1, statement->node_type);
       break;
     }
-
+#if 0
   if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
     {
       do_supplemental_statement (parser, statement);
     }
+#endif 
 
   /* enable data replication log */
   if (need_stmt_based_repl)

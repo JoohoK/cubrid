@@ -994,11 +994,12 @@ logtb_allocate_tran_index (THREAD_ENTRY * thread_p, TRANID trid, TRAN_STATE stat
 	  /* Assign a new transaction identifier for the new index */
 	  logtb_get_new_tran_id (thread_p, tdes);
 	  state = TRAN_ACTIVE;
-
+#if 0
           if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
             {
               log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_TRAN_USER, LOG_USERNAME_MAX, tdes->client.get_db_user());
             }
+#endif 
 	}
       else
 	{

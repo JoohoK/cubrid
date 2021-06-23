@@ -20606,12 +20606,12 @@ heap_delete_bigone (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, b
       log_addr.offset = overflow_oid.slotid;
       if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
 	{
-          log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
+         // log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
 	  
           RECDES ovf_recdes = RECDES_INITIALIZER;
 	  if (heap_get_bigone_content (thread_p, context->scan_cache_p, COPY, &overflow_oid, &ovf_recdes) != S_SUCCESS)
 	    {
-	      break;		/*supplemental log affects.. existing system..? */
+	      return ER_FAILED;		/*supplemental log affects.. existing system..? */
 	    }
 
 	  log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE,
@@ -20681,12 +20681,12 @@ heap_delete_bigone (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, b
 
       if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
 	{
-          log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
+         // log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
 
           RECDES ovf_recdes = RECDES_INITIALIZER;
 	  if (heap_get_bigone_content (thread_p, context->scan_cache_p, COPY, &overflow_oid, &ovf_recdes) != S_SUCCESS)
 	    {
-	      break;		/*supplemental log affects.. existing system..? */
+	      return ER_FAILED;		/*supplemental log affects.. existing system..? */
 	    }
 
 	  log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE,
@@ -20759,7 +20759,12 @@ heap_delete_relocation (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * contex
       return ER_FAILED;
     }
 
-  HEAP_PERF_TRACK_PREPARE (thread_p, context);
+      if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
+      {
+        log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, context->home_recdes.length, context->home_recdes.data);
+      }
+
+      HEAP_PERF_TRACK_PREPARE (thread_p, context);
 
   if (is_mvcc_op)
     {
@@ -21015,13 +21020,13 @@ heap_delete_relocation (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * contex
 	  home_addr.vfid = &context->hfid.vfid;
 	  home_addr.pgptr = context->home_page_watcher_p->pgptr;
 	  home_addr.offset = context->oid.slotid;
-
+#if 0
           if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
 	    {
               /*REC_RELOCATION -> REC_HOME/REC_RELOCATION/REC_BIGONE */
               log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
 	    }
-
+#endif 
           heap_mvcc_log_home_change_on_delete (thread_p, &context->home_recdes, &new_home_recdes, &home_addr);
 
 	  HEAP_PERF_TRACK_LOGGING (thread_p, context);
@@ -21063,7 +21068,7 @@ heap_delete_relocation (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * contex
 	  forward_addr.vfid = &context->hfid.vfid;
 	  forward_addr.pgptr = context->forward_page_watcher_p->pgptr;
 	  forward_addr.offset = forward_oid.slotid;
-
+#if 0 
           if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
 	    {
               log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
@@ -21072,7 +21077,7 @@ heap_delete_relocation (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * contex
 	      log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE,
 					   new_forward_recdes.length, new_forward_recdes.data);
 	    }
-
+#endif 
           heap_mvcc_log_delete (thread_p, &forward_addr, RVHF_MVCC_DELETE_REC_NEWHOME);
 
 	  HEAP_PERF_TRACK_LOGGING (thread_p, context);
@@ -21159,13 +21164,13 @@ heap_delete_relocation (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * contex
 				&context->home_recdes, is_reusable, NULL);
 
       HEAP_PERF_TRACK_LOGGING (thread_p, context);
-
+#if 0
       if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
         {
           /*NON-MVCC DELETE REC_RELOCATION AND REC_NEWHOME */
           log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
         }
-
+#endif 
       /* physical deletion of home record */
       rc = heap_delete_physical (thread_p, &context->hfid, context->home_page_watcher_p->pgptr, &context->oid);
       if (rc != NO_ERROR)
@@ -21439,14 +21444,14 @@ heap_delete_home (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, boo
 		  return ER_FAILED;
 		}
 	    }
-
+#if 0
           if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
 	    {
               log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
 
               log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, built_recdes.length, built_recdes.data);
 	    }
-
+#endif 
           /* log relocation */
 	  rec_address.pgptr = context->home_page_watcher_p->pgptr;
 	  rec_address.vfid = &context->hfid.vfid;
@@ -21469,13 +21474,14 @@ heap_delete_home (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, boo
 	  rec_address.pgptr = context->home_page_watcher_p->pgptr;
 	  rec_address.vfid = &context->hfid.vfid;
 	  rec_address.offset = context->oid.slotid;
+#if 0
 	  if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
 	    {
               log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
 	      
               log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, built_recdes.length, built_recdes.data);
 	    }
-
+#endif 
 	  heap_mvcc_log_delete (thread_p, &rec_address, RVHF_MVCC_DELETE_REC_HOME);
 
 	  HEAP_PERF_TRACK_LOGGING (thread_p, context);
@@ -21503,12 +21509,12 @@ heap_delete_home (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, boo
       bool is_reusable = heap_is_reusable_oid (context->file_type);
 
       HEAP_PERF_TRACK_EXECUTE (thread_p, context);
-
+#if 0
       if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
         {
           log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
         }	     
-
+#endif 
       /* log operation */
       heap_log_delete_physical (thread_p, context->home_page_watcher_p->pgptr, &context->hfid.vfid, &context->oid,
 				&context->home_recdes, is_reusable, NULL);
@@ -21691,10 +21697,10 @@ heap_update_bigone (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, b
 	  goto exit;
 	}
 
-      if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
-        {
-          log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
-        }
+      if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
+          {
+            log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, ovf_recdes.length + context->recdes_p->length, context->recdes_p->data);
+          }
 
       /* actual logging */
       log_append_undo_recdes2 (thread_p, RVHF_MVCC_UPDATE_OVERFLOW, &ovf_vfid, first_pgptr, -1, &ovf_recdes);
@@ -21877,6 +21883,11 @@ heap_update_relocation (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * contex
       goto exit;
     }
 
+  if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) && !oid_is_cached_class_oid(&context->class_oid))
+    {
+      log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, forward_recdes.length + context->recdes_p->length, context->recdes_p->data);
+    }
+
   HEAP_PERF_TRACK_PREPARE (thread_p, context);
 
   /* determine what operations on home/forward pages are necessary and execute extra operations for each case */
@@ -21968,11 +21979,6 @@ heap_update_relocation (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * contex
   if (update_old_home)
     {
 
-      if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
-        {
-          log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
-        }
-
       /* log operation */
       heap_log_update_physical (thread_p, context->home_page_watcher_p->pgptr, &context->hfid.vfid, &context->oid,
 				&context->home_recdes, &new_home_recdes,
@@ -22032,11 +22038,6 @@ heap_update_relocation (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * contex
    */
   if (update_old_forward)
     {
-      if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
-        {
-          log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
-        }
-
       /* log operation */
       heap_log_update_physical (thread_p, context->forward_page_watcher_p->pgptr, &context->hfid.vfid, &forward_oid,
 				&forward_recdes, context->recdes_p, RVHF_UPDATE);
@@ -22247,11 +22248,6 @@ heap_update_home (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, boo
 	}
       HEAP_PERF_TRACK_PREPARE (thread_p, context);
     }
-
-  if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
-  {
-    log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
-  }
 
   /* log home update */
   heap_log_update_physical (thread_p, context->home_page_watcher_p->pgptr, &context->hfid.vfid, &context->oid,
@@ -22569,6 +22565,12 @@ heap_insert_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, 
   CUBRID_OBJ_INSERT_START (&context->class_oid);
 #endif /* ENABLE_SYSTEMTAP */
 
+  /* REDO IMAGE FOR INSERT REGARDLESS of REC_TYPE */  
+  if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) && !oid_is_cached_class_oid(&context->class_oid) && context->recdes_p->type != REC_ASSIGN_ADDRESS)
+  {
+    log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, context->recdes_p->length, context->recdes_p->data);
+  }
+
   /*
    * Handle multipage object
    */
@@ -22619,11 +22621,12 @@ heap_insert_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, 
    */
   if (!context->use_bulk_logging)
     {
+#if 0
       if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
 	{
-	  log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID),
-				       (void *) &(context->class_oid));
+	  log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
 	}
+#endif 
       heap_log_insert_physical (thread_p, context->home_page_watcher_p->pgptr, &context->hfid.vfid, &context->res_oid,
 				context->recdes_p, is_mvcc_op, context->is_redistribute_insert_with_delid);
     }
@@ -22804,10 +22807,13 @@ heap_delete_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context)
     }
 
   HEAP_PERF_TRACK_PREPARE (thread_p, context);
+#if 0
   if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
     {
       log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
     }
+#endif 
+
   /*
    * Physical deletion and logging
    */
@@ -22823,6 +22829,11 @@ heap_delete_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context)
 
     case REC_HOME:
     case REC_ASSIGN_ADDRESS:
+      if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) && context->record_type == REC_HOME)
+      {
+        log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, context->home_recdes.length, context->home_recdes.data);
+      }
+
       rc = heap_delete_home (thread_p, context, is_mvcc_op);
       break;
 
@@ -22998,28 +23009,47 @@ heap_update_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context)
     }
 
   HEAP_PERF_TRACK_PREPARE (thread_p, context);
+#if 0 
   if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
     {
       log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
     }
+#endif 
   /*
    * Update record
    */
   switch (context->record_type)
     {
     case REC_RELOCATION:
-      rc = heap_update_relocation (thread_p, context, is_mvcc_op);
-      break;
-
+        rc = heap_update_relocation (thread_p, context, is_mvcc_op);
+        break;
     case REC_BIGONE:
-      rc = heap_update_bigone (thread_p, context, is_mvcc_op);
-      break;
+      {
+        if (!is_mvcc_op && prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
+        {
+          RECDES ovf_recdes = RECDES_INITIALIZER;
+          if (heap_get_bigone_content (thread_p, context->scan_cache_p, COPY, &context->ovf_oid, &ovf_recdes) != S_SUCCESS)
+	    {
+	      rc = ER_FAILED;
+	      goto exit;
+	    }
+              
+          log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, ovf_recdes.length + context->recdes_p->length, context->recdes_p->data);
+        }
 
+        rc = heap_update_bigone (thread_p, context, is_mvcc_op);
+        break;
+      }
     case REC_ASSIGN_ADDRESS:
       /* it's not an old record, it was inserted in this transaction */
       context->is_logical_old = false;
       /* FALLTHRU */
     case REC_HOME:
+
+      if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) && context->record_type == REC_HOME && !oid_is_cached_class_oid(&context->class_oid))
+        {
+          log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, context->home_recdes.length + context->recdes_p->length, context->recdes_p->data);
+        }
       rc = heap_update_home (thread_p, context, is_mvcc_op);
       break;
 

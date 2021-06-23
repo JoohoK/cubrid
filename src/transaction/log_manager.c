@@ -11358,6 +11358,7 @@ log_reader (void *arg)
 	    }
 	  else if (rcvindex == RVHF_MVCC_DELETE_REC_HOME || rcvindex == RVHF_MVCC_DELETE_OVERFLOW)
 	    {
+              /*MVCC DELETE HOME */
 	      undo_length = mvcc_undoredo->undoredo.ulength;
 
 	      int is_zipped = false;

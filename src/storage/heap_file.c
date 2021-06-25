@@ -69,6 +69,7 @@
 #include "thread_manager.hpp"	// for thread_get_thread_entry_info
 #include "db_value_printer.hpp"
 #include "log_append.hpp"
+#include "log_compress.h"
 #include "string_buffer.hpp"
 #include "tde.h"
 
@@ -20604,18 +20605,28 @@ heap_delete_bigone (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, b
       log_addr.pgptr = context->overflow_page_watcher_p->pgptr;
       log_addr.vfid = &context->hfid.vfid;
       log_addr.offset = overflow_oid.slotid;
+
       if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
 	{
          // log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
 	  
           RECDES ovf_recdes = RECDES_INITIALIZER;
+          LOG_ZIP * zip_undo = log_zip_alloc (IO_PAGESIZE);
+          int length;
+          void *data ;
+
 	  if (heap_get_bigone_content (thread_p, context->scan_cache_p, COPY, &overflow_oid, &ovf_recdes) != S_SUCCESS)
 	    {
 	      return ER_FAILED;		/*supplemental log affects.. existing system..? */
 	    }
+          length = ovf_recdes.length;
+          data = ovf_recdes.data; 
 
-	  log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE,
-				       ovf_recdes.length, ovf_recdes.data);
+          log_zip (zip_undo, length, data);
+          length = zip_undo->data_length;
+
+	  log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE,length, data);
+          log_zip_free (zip_undo);
 	}
 
       heap_mvcc_log_delete (thread_p, &log_addr, RVHF_MVCC_DELETE_OVERFLOW);
@@ -20682,15 +20693,22 @@ heap_delete_bigone (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, b
       if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
 	{
          // log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_CLASS_OID, sizeof (OID), (void *) &(context->class_oid));
-
           RECDES ovf_recdes = RECDES_INITIALIZER;
+          LOG_ZIP * zip_undo = log_zip_alloc (IO_PAGESIZE);
+          int length;
+          void *data;
+
 	  if (heap_get_bigone_content (thread_p, context->scan_cache_p, COPY, &overflow_oid, &ovf_recdes) != S_SUCCESS)
 	    {
 	      return ER_FAILED;		/*supplemental log affects.. existing system..? */
 	    }
+          length = ovf_recdes.length;
+          data = ovf_recdes.data; 
+          log_zip (zip_undo, length, data);
+          length = zip_undo->data_length;
 
-	  log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE,
-				       ovf_recdes.length, ovf_recdes.data);
+	  log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE,length, data);
+          log_zip_free (zip_undo);
 	}
 
       /* log operation */
@@ -20759,10 +20777,22 @@ heap_delete_relocation (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * contex
       return ER_FAILED;
     }
 
-      if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
-      {
-        log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, context->home_recdes.length, context->home_recdes.data);
-      }
+  if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
+    {
+      LOG_ZIP * zip_undo = log_zip_alloc (IO_PAGESIZE);
+      int length = forward_recdes.length;
+      void *data = forward_recdes.data;
+
+      if (length >= 255)
+        {
+          log_zip (zip_undo, length, context->recdes_p->data);
+          length = zip_undo->data_length;
+        }
+
+      log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, length, data);
+
+      log_zip_free(zip_undo);
+    }
 
       HEAP_PERF_TRACK_PREPARE (thread_p, context);
 
@@ -21699,7 +21729,41 @@ heap_update_bigone (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, b
 
       if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
           {
-            log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, ovf_recdes.length + context->recdes_p->length, context->recdes_p->data);
+            LOG_ZIP * zip_undo = log_zip_alloc (IO_PAGESIZE);
+            LOG_ZIP * zip_redo = log_zip_alloc (IO_PAGESIZE);
+            int ulength ;
+            int rlength ;
+            void *rdata = context->recdes_p->data;
+            void *udata = ovf_recdes.data;
+         
+            ulength = ovf_recdes.length;
+            rlength = context->recdes_p->length;
+
+            if (ulength >= 255 && rlength >= 255)
+            {
+              log_zip (zip_undo, ulength, udata);
+              log_zip (zip_redo, rlength, rdata);
+              ulength = zip_undo->data_length;
+              rlength = zip_redo->data_length;
+            }
+            else
+            {
+              if (ulength >= 255)
+              {
+                log_zip (zip_undo, ulength, udata);
+                ulength = zip_undo->data_length;
+              }
+
+              if(rlength >= 255)
+              {
+                log_zip (zip_redo, rlength, rdata);
+                rlength = zip_redo->data_length;
+              }
+            } 
+
+            log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, ulength + rlength, udata);
+            log_zip_free (zip_undo);
+            log_zip_free (zip_redo);
           }
 
       /* actual logging */
@@ -21885,7 +21949,38 @@ heap_update_relocation (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * contex
 
   if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) && !oid_is_cached_class_oid(&context->class_oid))
     {
-      log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, forward_recdes.length + context->recdes_p->length, context->recdes_p->data);
+      LOG_ZIP * zip_undo = log_zip_alloc (IO_PAGESIZE);
+      LOG_ZIP * zip_redo = log_zip_alloc (IO_PAGESIZE);
+      int ulength = forward_recdes.length;
+      int rlength = context->recdes_p->length;
+      void *rdata = context->recdes_p->data;
+      void *udata = forward_recdes.data;
+
+      if (ulength >= 255 && rlength >= 255)
+      {
+        log_zip (zip_undo, ulength, udata);
+        log_zip (zip_redo, rlength, rdata);
+        ulength = zip_undo->data_length;
+        rlength = zip_redo->data_length;
+      }
+      else
+      {
+        if (ulength >= 255)
+        {
+          log_zip (zip_undo, ulength, udata);
+          ulength = zip_undo->data_length;
+        }
+
+        if(rlength >= 255)
+        {
+          log_zip (zip_redo, rlength, rdata);
+          rlength = zip_redo->data_length;
+        }
+      }
+
+      log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, ulength + rlength, udata);
+      log_zip_free (zip_undo);
+      log_zip_free (zip_redo);
     }
 
   HEAP_PERF_TRACK_PREPARE (thread_p, context);
@@ -22568,7 +22663,19 @@ heap_insert_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, 
   /* REDO IMAGE FOR INSERT REGARDLESS of REC_TYPE */  
   if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) && !oid_is_cached_class_oid(&context->class_oid) && context->recdes_p->type != REC_ASSIGN_ADDRESS)
   {
-    log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, context->recdes_p->length, context->recdes_p->data);
+    LOG_ZIP * zip_undo = log_zip_alloc (IO_PAGESIZE);
+    int length = context->recdes_p->length;
+    void *data = context->recdes_p->data;
+
+    if(length >= 255)
+    {
+      log_zip (zip_undo, length, context->recdes_p->data);
+      length = zip_undo->data_length;
+      data = zip_undo->log_data; 
+    }
+
+    log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, length, data);
+    log_zip_free (zip_undo);
   }
 
   /*
@@ -22831,7 +22938,18 @@ heap_delete_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context)
     case REC_ASSIGN_ADDRESS:
       if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) && context->record_type == REC_HOME)
       {
-        log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, context->home_recdes.length, context->home_recdes.data);
+        LOG_ZIP * zip_undo = log_zip_alloc (IO_PAGESIZE);
+        int length = context->home_recdes.length;
+        void *data = context->home_recdes.data;
+
+        if (length >= 255)
+          {
+            log_zip (zip_undo, length, context->recdes_p->data);
+            length = zip_undo->data_length;
+          }
+
+        log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, length, data);
+        log_zip_free (zip_undo);
       }
 
       rc = heap_delete_home (thread_p, context, is_mvcc_op);
@@ -23027,14 +23145,49 @@ heap_update_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context)
       {
         if (!is_mvcc_op && prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
         {
+          LOG_ZIP * zip_undo = log_zip_alloc (IO_PAGESIZE);
+          LOG_ZIP * zip_redo = log_zip_alloc (IO_PAGESIZE);
+          int ulength ;
+          int rlength ;
+          void *rdata ;
+          void *udata ;
+
           RECDES ovf_recdes = RECDES_INITIALIZER;
           if (heap_get_bigone_content (thread_p, context->scan_cache_p, COPY, &context->ovf_oid, &ovf_recdes) != S_SUCCESS)
 	    {
 	      rc = ER_FAILED;
 	      goto exit;
 	    }
-              
-          log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, ovf_recdes.length + context->recdes_p->length, context->recdes_p->data);
+          rdata = ovf_recdes.data; 
+          udata = context->recdes_p->data;
+          ulength = ovf_recdes.length;
+          rlength = context->recdes_p->length;
+
+          if (ulength >= 255 && rlength >= 255)
+          {
+            log_zip (zip_undo, ulength, udata);
+            log_zip (zip_redo, rlength, rdata);
+            ulength = zip_undo->data_length;
+            rlength = zip_redo->data_length;
+         }
+          else
+          {
+            if (ulength >= 255)
+            {
+              log_zip (zip_undo, ulength, udata);
+              ulength = zip_undo->data_length;
+            }
+
+            if(rlength >= 255)
+            {
+              log_zip (zip_redo, rlength, rdata);
+              rlength = zip_redo->data_length;
+            }
+          }
+
+          log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, ulength + rlength, udata);
+          log_zip_free (zip_undo);
+          log_zip_free (zip_redo);
         }
 
         rc = heap_update_bigone (thread_p, context, is_mvcc_op);
@@ -23048,7 +23201,38 @@ heap_update_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context)
 
       if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) && context->record_type == REC_HOME && !oid_is_cached_class_oid(&context->class_oid))
         {
-          log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, context->home_recdes.length + context->recdes_p->length, context->recdes_p->data);
+          LOG_ZIP * zip_undo = log_zip_alloc (IO_PAGESIZE);
+          LOG_ZIP * zip_redo = log_zip_alloc (IO_PAGESIZE);
+          int ulength = context->home_recdes.length;
+          int rlength = context->recdes_p->length;
+          void *udata = context->home_recdes.data;
+          void *rdata = context->recdes_p->data;
+
+          if (ulength >= 255 && rlength >= 255)
+          {
+            log_zip (zip_undo, ulength, udata);
+            log_zip (zip_redo, rlength, rdata);
+            ulength = zip_undo->data_length;
+            rlength = zip_redo->data_length;
+         }
+          else
+          {
+            if (ulength >= 255)
+            {
+              log_zip (zip_undo, ulength, udata);
+              ulength = zip_undo->data_length;
+            }
+
+            if(rlength >= 255)
+            {
+              log_zip (zip_redo, rlength, rdata);
+              rlength = zip_redo->data_length;
+            }
+          }
+
+          log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_FOR_DELETE, ulength + rlength, udata);
+          log_zip_free (zip_undo);
+          log_zip_free (zip_redo);
         }
       rc = heap_update_home (thread_p, context, is_mvcc_op);
       break;

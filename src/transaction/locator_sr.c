@@ -11677,7 +11677,7 @@ xlog_supplement_statement (THREAD_ENTRY * thread_p, int statement_type, char *cl
 
   int error_code;
 
-  assert (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG));
+  assert (prm_get_integer_value (PRM_ID_SUPPLEMENTAL_LOG) > 0 );
 
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
   tdes = LOG_FIND_TDES (tran_index);
@@ -11755,7 +11755,7 @@ xlog_supplement_statement (THREAD_ENTRY * thread_p, int statement_type, char *cl
 
   length = ptr - start_ptr;
 
-  log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_STATEMENT, length, (void *) start_ptr);
+  log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_DDL, length, (void *) start_ptr);
 
   free_and_init (data);
 }
@@ -12753,6 +12753,9 @@ redistribute_partition_data (THREAD_ENTRY * thread_p, OID * class_oid, int no_oi
   MVCCID threshold_mvccid = MVCCID_NULL;
 
   assert (tdes != NULL);
+
+  /* Insert Log generated from ALTER statement, is required to be ignored */
+  thread_p->no_supplemental_log = true; 
 
   PGBUF_INIT_WATCHER (&old_page_watcher, PGBUF_ORDERED_RANK_UNDEFINED, PGBUF_ORDERED_NULL_HFID);
 

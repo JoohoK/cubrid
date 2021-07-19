@@ -543,6 +543,8 @@ struct log_tdes
 
   log_postpone_cache m_log_postpone_cache;
 
+  bool has_supplemental_log; /* checks if supplemental log has been appended withing the transaction */
+
   // *INDENT-OFF*
 #if defined (SERVER_MODE) || (defined (SA_MODE) && defined (__cplusplus))
 
@@ -770,9 +772,9 @@ typedef struct log_info_entry
 
 typedef struct temporary_log_buffer
 {
-  int tranid;
-  LOG_LSA lsa;
-  char *log_record;
+  int pageid;
+  LOG_PAGE *log_page_p;
+  char log_page[IO_MAX_PAGE_SIZE + MAX_ALIGNMENT];
 } TEMPORARY_LOG_BUFFER;
 
 typedef struct log_reader_info

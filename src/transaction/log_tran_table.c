@@ -994,11 +994,6 @@ logtb_allocate_tran_index (THREAD_ENTRY * thread_p, TRANID trid, TRAN_STATE stat
 	  /* Assign a new transaction identifier for the new index */
 	  logtb_get_new_tran_id (thread_p, tdes);
 	  state = TRAN_ACTIVE;
-
-          if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
-            {
-              log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_TRAN_USER, LOG_USERNAME_MAX, tdes->client.get_db_user());
-            }
 	}
       else
 	{
@@ -1569,6 +1564,7 @@ logtb_clear_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
   tdes->num_exec_queries = 0;
   tdes->suppress_replication = 0;
   tdes->m_log_postpone_cache.reset ();
+  tdes->has_supplemental_log = false;
 
   logtb_tran_clear_update_stats (&tdes->log_upd_stats);
 
@@ -1681,6 +1677,8 @@ logtb_initialize_tdes (LOG_TDES * tdes, int tran_index)
 
   tdes->block_global_oldest_active_until_commit = false;
   tdes->is_user_active = false;
+
+  tdes->has_supplemental_log = false;
 
   LSA_SET_NULL (&tdes->rcv.tran_start_postpone_lsa);
   LSA_SET_NULL (&tdes->rcv.sysop_start_postpone_lsa);

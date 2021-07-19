@@ -3328,7 +3328,7 @@ do_statement (PARSER_CONTEXT * parser, PT_NODE * statement)
 	    }
 	}
 
-      if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
+      if (prm_get_integer_value (PRM_ID_SUPPLEMENTAL_LOG) > 0)
 	{
 	  do_supplemental_statement (parser, statement);
 	}
@@ -3760,7 +3760,7 @@ do_execute_statement (PARSER_CONTEXT * parser, PT_NODE * statement)
       break;
     }
 
-  if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG))
+  if (prm_get_integer_value (PRM_ID_SUPPLEMENTAL_LOG) > 0)
     {
       do_supplemental_statement (parser, statement);
     }

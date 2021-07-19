@@ -168,6 +168,9 @@ extern void log_append_repl_info (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool
 
 extern void log_append_supplemental_log (THREAD_ENTRY * thread_p, SUPPLEMENT_REC_TYPE rec_type, int length,
 					 const void *data);
+extern int log_append_supplemental_lsa (THREAD_ENTRY * thread_p, SUPPLEMENT_REC_TYPE rec_type, OID * classoid, LOG_LSA * undo_lsa, LOG_LSA * redo_lsa);
+
+extern int log_append_supplemental_undo_record (THREAD_ENTRY * thread_p, RECDES * undo_recdes);
 
 /*
  * FOR DEBUGGING

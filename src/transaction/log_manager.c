@@ -339,14 +339,17 @@ static int logtb_tran_update_stats_online_index_rb (THREAD_ENTRY * thread_p, voi
 /*for CDC */
 static int log_reader_initialize ();
 static THREAD_RET_T THREAD_CALLING_CONVENTION log_reader (void *arg);
+
+static int log_reader_get_recdes (THREAD_ENTRY *thread_p, TEMPORARY_LOG_BUFFER *temp_logbuf, LOG_LSA * undo_lsa, RECDES * undo_recdes, LOG_LSA * redo_lsa, RECDES * redo_recdes);
+
 static int get_class_oid (THREAD_ENTRY * thread_p, LOG_LSA lsa, OID & classoid);
 static int find_pk (THREAD_ENTRY * thread_p, OID classoid, int repr_id, int *num_attr, int **pk_attr_id);
 static int make_dml (THREAD_ENTRY * thread_p, int trid, char *user, int dml_type, OID classoid, RECDES * undo_recdes,
-		     int ulength, RECDES * redo_recdes, int rlength, LOG_INFO_ENTRY * dml_entry);
+		     RECDES * redo_recdes, LOG_INFO_ENTRY * dml_entry);
 static int make_ddl (char *supplement_data, int trid, const char *user, LOG_INFO_ENTRY * ddl_entry);
 static int make_dcl (time_t at_time, int trid, char *user, int type, LOG_INFO_ENTRY * dcl_entry);
 static int make_timer (time_t at_time, int trid, char *user, LOG_INFO_ENTRY * timer_entry);
-static int find_tran_user (THREAD_ENTRY * thread_p, LOG_LSA lsa, int trid, char **user);
+static int find_tran_user (THREAD_ENTRY * thread_p, LOG_PAGE *log_page, LOG_LSA lsa, int trid, char **user);
 static int compare_data (const db_value * new_value, const db_value * cmpdata);
 static int put_data (const db_value * new_value, char **ptr);
 static int is_filtered_user (char *user);
@@ -2151,11 +2154,6 @@ log_append_undoredo_crumbs (THREAD_ENTRY * thread_p, LOG_RCVINDEX rcvindex, LOG_
       return;
     }
 
-  if (LSA_ISNULL (&tdes->head_lsa) && prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
-    {
-      log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_TRAN_USER, LOG_USERNAME_MAX, tdes->client.get_db_user ());
-    }
-
   /*
    * Now do the UNDO & REDO portion
    */
@@ -2284,10 +2282,7 @@ log_append_undo_crumbs (THREAD_ENTRY * thread_p, LOG_RCVINDEX rcvindex, LOG_DATA
       ;				/* NO-OP */
       return;
     }
-  if (LSA_ISNULL (&tdes->head_lsa) && prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
-    {
-      log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_TRAN_USER, LOG_USERNAME_MAX, tdes->client.get_db_user ());
-    }
+
   /*
    * NOW do the UNDO ...
    */
@@ -2425,11 +2420,6 @@ log_append_redo_crumbs (THREAD_ENTRY * thread_p, LOG_RCVINDEX rcvindex, LOG_DATA
   if (log_can_skip_redo_logging (rcvindex, tdes, addr) == true)
     {
       return;
-    }
-
-  if (LSA_ISNULL (&tdes->head_lsa) && prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
-    {
-      log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_TRAN_USER, LOG_USERNAME_MAX, tdes->client.get_db_user ());
     }
 
   node = prior_lsa_alloc_and_copy_crumbs (thread_p, rectype, rcvindex, addr, 0, NULL, num_crumbs, crumbs);
@@ -3442,11 +3432,6 @@ log_append_savepoint (THREAD_ENTRY * thread_p, const char *savept_name)
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LOG_NONAME_SAVEPOINT, 0);
       error_code = ER_LOG_NONAME_SAVEPOINT;
       return NULL;
-    }
-
-  if (LSA_ISNULL (&tdes->head_lsa) && prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
-    {
-      log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_TRAN_USER, LOG_USERNAME_MAX, tdes->client.get_db_user ());
     }
 
   length = (int) strlen (savept_name) + 1;
@@ -4655,11 +4640,6 @@ log_append_repl_info_with_lock (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool i
 static void
 log_append_repl_info_and_commit_log (THREAD_ENTRY * thread_p, LOG_TDES * tdes, LOG_LSA * commit_lsa)
 {
-  if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
-    {
-      log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_TRAN_USER, LOG_USERNAME_MAX, tdes->client.get_db_user ());
-    }
-
   log_Gl.prior_info.prior_lsa_mutex.lock ();
 
   log_append_repl_info_with_lock (thread_p, tdes, true);
@@ -4787,10 +4767,6 @@ log_change_tran_as_completed (THREAD_ENTRY * thread_p, LOG_TDES * tdes, LOG_RECT
 static void
 log_append_commit_log (THREAD_ENTRY * thread_p, LOG_TDES * tdes, LOG_LSA * commit_lsa)
 {
-  if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
-    {
-      log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_TRAN_USER, LOG_USERNAME_MAX, tdes->client.get_db_user ());
-    }
   log_append_donetime_internal (thread_p, tdes, commit_lsa, LOG_COMMIT, LOG_PRIOR_LSA_WITHOUT_LOCK);
 }
 
@@ -4819,10 +4795,14 @@ log_append_commit_log_with_lock (THREAD_ENTRY * thread_p, LOG_TDES * tdes, LOG_L
 static void
 log_append_abort_log (THREAD_ENTRY * thread_p, LOG_TDES * tdes, LOG_LSA * abort_lsa)
 {
-  if (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true)
+  if (prm_get_integer_value (PRM_ID_SUPPLEMENTAL_LOG) > 0 )
+  {
+    if (tdes->has_supplemental_log)
     {
-      log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_TRAN_USER, LOG_USERNAME_MAX, tdes->client.get_db_user ());
+      tdes->has_supplemental_log = false;
     }
+  }
+
   log_append_donetime_internal (thread_p, tdes, abort_lsa, LOG_ABORT, LOG_PRIOR_LSA_WITHOUT_LOCK);
 }
 
@@ -4846,7 +4826,7 @@ log_append_supplemental_log (THREAD_ENTRY * thread_p, SUPPLEMENT_REC_TYPE rec_ty
   LOG_TDES *tdes;
   int tran_index;
 
-  assert (prm_get_bool_value (PRM_ID_SUPPLEMENTAL_LOG) == true);
+  assert (prm_get_integer_value (PRM_ID_SUPPLEMENTAL_LOG) > 0);
 
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
   tdes = LOG_FIND_TDES (tran_index);
@@ -4865,6 +4845,84 @@ log_append_supplemental_log (THREAD_ENTRY * thread_p, SUPPLEMENT_REC_TYPE rec_ty
   supplement->length = length;
 
   prior_lsa_next_record (thread_p, node, tdes);
+}
+
+int
+log_append_supplemental_lsa (THREAD_ENTRY * thread_p, SUPPLEMENT_REC_TYPE rec_type, OID *classoid, LOG_LSA *undo_lsa, LOG_LSA *redo_lsa)
+{
+  int size;
+  char data[OR_OID_SIZE + OR_LOG_LSA_SIZE + OR_LOG_LSA_SIZE];
+
+  assert (prm_get_integer_value (PRM_ID_SUPPLEMENTAL_LOG) > 0);
+
+  switch (rec_type)
+  {
+    case LOG_SUPPLEMENT_INSERT :
+      assert (redo_lsa != NULL);
+
+      size = sizeof (OID) + sizeof (LOG_LSA);
+
+      memcpy (data, classoid, sizeof(OID));
+      memcpy (data + sizeof (OID), redo_lsa, sizeof (LOG_LSA));
+      break;
+
+    case LOG_SUPPLEMENT_UPDATE :
+      assert (undo_lsa != NULL && redo_lsa != NULL);
+
+      size = sizeof (OID) + sizeof (LOG_LSA) + sizeof (LOG_LSA);
+
+      memcpy (data, classoid, sizeof(OID));
+      memcpy (data + sizeof (OID), undo_lsa, sizeof (LOG_LSA));
+      memcpy (data + sizeof(OID) + sizeof(LOG_LSA), redo_lsa, sizeof(LOG_LSA));
+      break;
+
+    case LOG_SUPPLEMENT_DELETE :
+      assert (undo_lsa != NULL);
+
+      size = sizeof (OID) + sizeof (LOG_LSA);
+
+      memcpy (data, classoid, sizeof(OID));
+      memcpy (data + sizeof (OID), undo_lsa, sizeof(LOG_LSA));
+      break;
+  }
+  
+  log_append_supplemental_log (thread_p, rec_type, size, (void*) data);
+
+  return NO_ERROR;
+}
+
+int
+log_append_supplemental_undo_record (THREAD_ENTRY *thread_p, RECDES *undo_recdes)
+{
+  assert (undo_recdes != NULL);
+  assert (prm_get_integer_value (PRM_ID_SUPPLEMENTAL_LOG) > 0);
+
+  LOG_ZIP * zip_undo = NULL; 
+  int length = undo_recdes->length;
+  void *data = undo_recdes->data;
+  int min_size_to_compress = 255;
+
+  if (length >= min_size_to_compress)
+  {
+    zip_undo = log_zip_alloc (IO_PAGESIZE);
+    if (zip_undo == NULL)
+    {
+      return ER_OUT_OF_VIRTUAL_MEMORY;
+    }
+
+    log_zip (zip_undo, length, data);
+    length = zip_undo->data_length;
+    data = zip_undo->log_data;
+  }
+
+  log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_UNDO_RECORD, length, data);
+
+  if (zip_undo != NULL)
+  {  
+    log_zip_free (zip_undo);
+  }
+
+  return NO_ERROR;
 }
 
 /*
@@ -5055,6 +5113,19 @@ log_commit_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool retain_lock, bo
       if (is_local_tran)
 	{
 	  LOG_LSA commit_lsa;
+
+          if (prm_get_integer_value (PRM_ID_SUPPLEMENTAL_LOG) > 0)
+          {
+            if (tdes->has_supplemental_log)
+            {
+              const char *user = tdes->client.get_db_user ();
+              int length = strlen (user);
+              
+              log_append_supplemental_log (thread_p, LOG_SUPPLEMENT_TRAN_USER, length, user);
+
+              tdes->has_supplemental_log = false; /*CAN BE DELETED WHEN LOG_TDES is cleared when commit */
+            }
+          }
 
 	  /* To write unlock log before releasing locks for transactional consistencies. When a transaction(T2) which
 	   * is resumed by this committing transaction(T1) commits and a crash happens before T1 completes, transaction
@@ -10871,41 +10942,36 @@ log_reader (void *arg)
 
   /* *INDENT-OFF* */
   std::unordered_map<TRANID, char *> tran_users;
+  std::unordered_map<TRANID, int > tran_ignore;
   /* *INDENT-ON* */
   char *tran_user;
 
   LOG_INFO_ENTRY *log_info_entry;
 
-  TEMPORARY_LOG_BUFFER temp_logbuf[1024];
-  char *tmp_log;
-
-  LOG_REC_MVCC_UNDO *mvcc_undo = NULL;
-  LOG_REC_MVCC_REDO *mvcc_redo = NULL;
-  LOG_RCVINDEX rcvindex;
-
-  RECDES undo_recdes = RECDES_INITIALIZER;
-  RECDES redo_recdes = RECDES_INITIALIZER;
-  int undo_length;
-  int redo_length;
-
-
-  int length;
-
-  OID classoid;
+  /*temp_logbuf consists of 2 entry, every time fetching new page, page will be stored in temp_logbuf[pageid%2] */
+  TEMPORARY_LOG_BUFFER *temp_logbuf = NULL; 
+  int tmpbuf_index = 0; 
 
   int trid;
-  int index;
-
-  char *tmp_ptr;
-  char *tmp_data;
 
   LOG_RECTYPE log_type;
+
 /*Getting thread_p is required to be changed*/
   THREAD_ENTRY *thread_p = logtb_find_thread_by_tran_index_except_me (0);
-  //memcpy(thread_p->conn_entry,  ((LOG_READER_ARGS *) arg)->thread_p->conn_entry, sizeof(thread_p->conn_entry));
   /* *INDENT-OFF* */
   cubthread::set_thread_local_entry(*thread_p);
   /* *INDENT-ON* */
+  
+  temp_logbuf = (TEMPORARY_LOG_BUFFER *) malloc (2 * sizeof (TEMPORARY_LOG_BUFFER));
+  if (temp_logbuf == NULL)
+  {
+    return (THREAD_RET_T) -1;
+  }
+
+  temp_logbuf[0].log_page_p = (LOG_PAGE *) PTR_ALIGN (temp_logbuf[0].log_page , MAX_ALIGNMENT);
+  temp_logbuf[0].pageid = -1;
+  temp_logbuf[1].log_page_p = (LOG_PAGE *) PTR_ALIGN (temp_logbuf[1].log_page , MAX_ALIGNMENT);
+  temp_logbuf[1].pageid = -1;
 
   LSA_COPY (&cur_log_rec_lsa, &(((LOG_READER_ARGS *) arg)->start_lsa));
   LSA_COPY (&process_lsa, &cur_log_rec_lsa);
@@ -10921,6 +10987,10 @@ log_reader (void *arg)
 	  logpb_fatal_error (thread_p, true, ARG_FILE_LINE, "log_reader()");
 	  /*logpb_fatal_error need to be deleted, since this won't kill server */
 	}
+
+      tmpbuf_index = process_lsa.pageid % 2;
+      temp_logbuf[tmpbuf_index].pageid = process_lsa.pageid;
+      memcpy(temp_logbuf[tmpbuf_index].log_page_p, log_page_p, LOG_PAGESIZE); 
 
       log_info_entry = (LOG_INFO_ENTRY *) malloc (sizeof (LOG_INFO_ENTRY));
       if (log_info_entry == NULL)
@@ -10959,12 +11029,32 @@ log_reader (void *arg)
 	  LOG_REC_DONETIME * donetime;
 
 	  LOG_READ_ADVANCE_WHEN_DOESNT_FIT (thread_p, sizeof (*donetime), &process_lsa, log_page_p);
+          if ((process_lsa.pageid % 2) != tmpbuf_index)
+          {
+            tmpbuf_index = (tmpbuf_index+1) % 2;
+            temp_logbuf[tmpbuf_index].pageid = process_lsa.pageid;
+            memcpy (temp_logbuf[tmpbuf_index].log_page_p , log_page_p, LOG_PAGESIZE);
+          }
+
+          if (tran_ignore.count (trid) != 0)
+          {
+            tran_ignore.erase (trid);
+            break;
+          }
+
 	  donetime = (LOG_REC_DONETIME *) (log_page_p->area + process_lsa.offset);
 
 	  if (tran_users.count (trid) == 0)
 	    {
-	      find_tran_user (thread_p, cur_log_rec_lsa, trid, &tran_user);
-	      tran_users.insert (std::make_pair (trid, tran_user));
+	     if (find_tran_user (thread_p, temp_logbuf[tmpbuf_index].log_page_p, cur_log_rec_lsa, trid, &tran_user) == NO_ERROR)
+              {
+                tran_users.insert (std::make_pair (trid, tran_user));
+              }
+              else
+              {
+                /* can not find user. It meets abort log. So, ignore the logs from this transaction */
+                tran_ignore.insert (std::make_pair (trid, 1));
+              }
 	    }
 	  else
 	    {
@@ -10973,11 +11063,6 @@ log_reader (void *arg)
               /* *INDENT-ON* */
 	    }
 
-	  if (!is_filtered_user (tran_user))
-	    {
-	      tran_users.erase (trid);
-	      break;
-	    }
 #if !defined(NDEBUG)		// JOOHOK
 	  _er_log_debug (ARG_FILE_LINE, "Log record type : %s, Time : %ld, LSA : (%lld|%d) ",
 			 log_to_string (log_type), donetime->at_time, LSA_AS_ARGS (&cur_log_rec_lsa));
@@ -10989,7 +11074,6 @@ log_reader (void *arg)
 #if !defined(NDEBUG)		//JOOHOK
 	      _er_log_debug (ARG_FILE_LINE, "make DCL failed ");
 #endif
-	      /* JOOHOK : log insert */
 	    }
 
 	  tran_users.erase (trid);
@@ -11000,6 +11084,14 @@ log_reader (void *arg)
 	  LOG_REC_HA_SERVER_STATE * ha_dummy;
 
 	  LOG_READ_ADVANCE_WHEN_DOESNT_FIT (thread_p, sizeof (*ha_dummy), &process_lsa, log_page_p);
+
+          if ((process_lsa.pageid % 2) != tmpbuf_index)
+          {
+            tmpbuf_index = (tmpbuf_index+1) % 2;
+            temp_logbuf[tmpbuf_index].pageid = process_lsa.pageid;
+            memcpy (temp_logbuf[tmpbuf_index].log_page_p , log_page_p, LOG_PAGESIZE);
+          }
+
 	  ha_dummy = (LOG_REC_HA_SERVER_STATE *) (log_page_p->area + process_lsa.offset);
 
 	  if (make_timer (ha_dummy->at_time, trid, NULL, log_info_entry) != NO_ERROR)
@@ -11017,7 +11109,24 @@ log_reader (void *arg)
 	  char *supplement_data;
 	  char *tmp_data, *ddl_data;
 
+          OID classoid;
+
+          LOG_LSA undo_lsa, redo_lsa;
+          RECDES undo_recdes, redo_recdes;
+
 	  LOG_READ_ADVANCE_WHEN_DOESNT_FIT (thread_p, sizeof (*supplement), &process_lsa, log_page_p);
+
+          if ((process_lsa.pageid % 2) != tmpbuf_index)
+          {
+            tmpbuf_index = (tmpbuf_index+1) % 2;
+            temp_logbuf[tmpbuf_index].pageid = process_lsa.pageid;
+            memcpy (temp_logbuf[tmpbuf_index].log_page_p , log_page_p, LOG_PAGESIZE);
+          }
+
+          if (tran_ignore.count (trid) != 0)
+          {
+            break;
+          }
 
 	  supplement = (LOG_REC_SUPPLEMENT *) (log_page_p->area + process_lsa.offset);
 	  supplement_length = supplement->length;
@@ -11026,65 +11135,77 @@ log_reader (void *arg)
 
 	  supplement_data = (char *) log_page_p->area + process_lsa.offset;
 
-	  if (supplement->rec_type == LOG_SUPPLEMENT_TRAN_USER)
-	    {
+          if (supplement->rec_type != LOG_SUPPLEMENT_TRAN_USER)
+          {
+            if (tran_users.count (trid) == 0)
+            {
+		  /* JOOHOK : error handling when user not found */
+              if (find_tran_user (thread_p, temp_logbuf[tmpbuf_index].log_page_p, cur_log_rec_lsa, trid, &tran_user) == NO_ERROR)
+              {
+                tran_users.insert (std::make_pair (trid, tran_user));
+              }
+              else
+              {
+                /* can not find user. It meets abort log. So, ignore the logs from this transaction */
+                tran_ignore.insert (std::make_pair (trid, 1));
+              }
+            }
+            else
+            {
+              tran_user = tran_users.at (trid);
+            }
+          }
+
+          switch (supplement->rec_type)
+          {
+            case LOG_SUPPLEMENT_TRAN_USER :
 	      if (tran_users.count (trid) != 0)
 		{
 		  break;
 		}
+              else
+              {
 
-	      tran_user = (char *) malloc (supplement_length + 1);
-	      if (tran_user == NULL)
-		{
+	        tran_user = (char *) malloc (supplement_length + 1);
+	        if (tran_user == NULL)
+		  {
 #if !defined(NDEBUG)		//JOOHOK
 		  _er_log_debug (ARG_FILE_LINE, "In supplement TRAN_USER, Tran usr alloc failed ");
 #endif
-		}
+		  }
 
-	      memcpy (tran_user, supplement_data, supplement_length);
-	      tran_user[supplement_length] = '\0';
+	        memcpy (tran_user, supplement_data, supplement_length);
+	        tran_user[supplement_length] = '\0';
 
-	      if (is_filtered_user (tran_user) == true)
-		{
-		  tran_users.insert (std::make_pair (trid, tran_user));
-		}
-	      else
-		{
-		  if (tran_user != NULL)
-		    {
-		      free (tran_user);
-		    }
-		}
-	    }
-	  else if (supplement->rec_type == LOG_SUPPLEMENT_STATEMENT)
-	    {
-	      tmp_data = (char *) malloc (supplement_length + MAX_ALIGNMENT);
-	      if (tmp_data == NULL)
-		{
-#if !defined(NDEBUG)		//JOOHOK
-		  _er_log_debug (ARG_FILE_LINE, "In supplement STATEMENT, tmp data alloc failed ");
-#endif
-		}
-	      ddl_data = PTR_ALIGN (tmp_data, MAX_ALIGNMENT);
-	      memcpy (ddl_data, supplement_data, supplement_length);
+		tran_users.insert (std::make_pair (trid, tran_user));
+              
+                break;
+              }
+            case LOG_SUPPLEMENT_INSERT :
+              memcpy (&classoid, supplement_data, sizeof (OID));
+              memcpy (&redo_lsa, supplement_data + sizeof (OID), sizeof(LOG_LSA));
 
-	      if (tran_users.count (trid) == 0)
-		{
-		  /* JOOHOK : error handling when user not found */
-		  find_tran_user (thread_p, cur_log_rec_lsa, trid, &tran_user);
+              log_reader_get_recdes (thread_p, temp_logbuf, NULL, NULL, &redo_lsa, &redo_recdes);
 
-		  tran_users.insert (std::make_pair (trid, tran_user));
-		}
-	      else
-		{
-		  tran_user = tran_users.at (trid);
-		}
+              make_dml (thread_p, trid, tran_user, 1, classoid, NULL, &redo_recdes, log_info_entry);
+              break;
+            case LOG_SUPPLEMENT_UPDATE :
+              memcpy (&classoid, supplement_data, sizeof (OID));
+              memcpy (&undo_lsa, supplement_data + sizeof (OID), sizeof(LOG_LSA));
+              memcpy (&redo_lsa, supplement_data + sizeof (OID) + sizeof (LOG_LSA), sizeof (LOG_LSA));
 
-	      if (!is_filtered_user (tran_user))
-		{
-		  break;
-		}
+              log_reader_get_recdes (thread_p, temp_logbuf, &undo_lsa, &undo_recdes, &redo_lsa, &redo_recdes);
+              make_dml (thread_p, trid, tran_user, 1, classoid, &undo_recdes, &redo_recdes, log_info_entry);
+              break;
+            case LOG_SUPPLEMENT_DELETE : 
+              memcpy (&classoid, supplement_data, sizeof (OID));
+              memcpy (&undo_lsa, supplement_data + sizeof (OID), sizeof(LOG_LSA));
 
+              log_reader_get_recdes (thread_p, temp_logbuf, &undo_lsa, &undo_recdes, NULL, NULL);
+              make_dml (thread_p, trid, tran_user, 2, classoid, &undo_recdes, NULL, log_info_entry);
+
+              break;
+            case LOG_SUPPLEMENT_DDL :
 	      if (make_ddl (supplement_data, trid, tran_user, log_info_entry) != NO_ERROR)
 		{
 #if !defined(NDEBUG)		//JOOHOK
@@ -11092,369 +11213,14 @@ log_reader (void *arg)
 #endif
 		}
 
-	      free (tmp_data);
-	    }
+              break; 
 
+            default : 
+              break; 
+          }
 	  break;
 
-	case LOG_MVCC_UNDOREDO_DATA:
-	  LOG_REC_MVCC_UNDOREDO * mvcc_undoredo;
-
-	  LOG_READ_ADVANCE_WHEN_DOESNT_FIT (thread_p, sizeof (*mvcc_undoredo), &process_lsa, log_page_p);
-	  mvcc_undoredo = (LOG_REC_MVCC_UNDOREDO *) (log_page_p->area + process_lsa.offset);
-
-	  rcvindex = mvcc_undoredo->undoredo.data.rcvindex;
-	  get_class_oid (thread_p, cur_log_rec_lsa, classoid);
-
-	  if (OID_ISNULL (&classoid))
-	    {
-#if !defined(NDEBUG)		//JOOHOK
-	      _er_log_debug (ARG_FILE_LINE, "IN mvcc undoredo, class oid is null ");
-#endif
-	    }
-	  if (!OID_ISNULL (&classoid))
-	    {
-	      if (oid_is_system_class (&classoid) || !is_filtered_class (classoid))	//except dual class.. bug fix 
-		{
-		  break;
-		}
-	    }
-	  LOG_READ_ADD_ALIGN (thread_p, sizeof (*mvcc_undoredo), &process_lsa, log_page_p);
-
-	  if (tran_users.count (trid) == 0)
-	    {
-	      find_tran_user (thread_p, cur_log_rec_lsa, trid, &tran_user);
-	      tran_users.insert (std::make_pair (trid, tran_user));
-	    }
-	  else
-	    {
-	      tran_user = tran_users.at (trid);
-	    }
-
-	  if (is_filtered_user (tran_user) == false)
-	    {
-	      break;
-	    }
-
-#if !defined(NDEBUG) && 0	// JOOHOK
-	  _er_log_debug (ARG_FILE_LINE, "Log record type : %s, LSA : (%lld|%d) \n", log_to_string (log_type),
-			 LSA_AS_ARGS (&cur_log_rec_lsa));
-	  _er_log_debug (ARG_FILE_LINE, "trid : %d, tran_user : %s, classoid : %d|%d|%d \n", trid, tran_user,
-			 classoid.volid, classoid.pageid, classoid.slotid);
-#endif
-
-	  if (rcvindex == RVHF_UPDATE_NOTIFY_VACUUM)
-	    {
-	      undo_recdes.type = *(INT16 *) (log_page_p->area + process_lsa.offset);
-#if 0
-	      if (undo_recdes.type == RECHOME)
-		{
-		  undo_length = mvcc_undoredo->undoredo.ulength;
-		  if (ZIP_CHECK (undo_length))
-		    {
-		      undo_length = (int) GET_ZIP_LEN (undo_length);
-		    }
-		  process_lsa.offset += sizeof (INT16);
-		  undo_recdes.data = (char *) malloc (undo_length);
-		  memcpy (undo_recdes.data, log_page_p->area + process_lsa.offset, undo_length);
-		  process_lsa.offset += undo_length;
-		  LOG_READ_ALIGN (thread_p, &process_lsa, log_page_p);
-		  redo_recdes.type = *(INT16 *) (log_page_p->area + process_lsa.offset);
-		  if (redo_recdes.type == REC_HOME)
-		    {
-		      redo_length = mvcc_undoredo->undoredo.rlength;
-		      if (ZIP_CHECK (redo_length))
-			{
-			  redo_length = (int) GET_ZIP_LEN (redo_length);
-			}
-		      process_lsa.offset += sizeof (INT16);
-		      redo_recdes.data = (char *) malloc (redo_length);
-		      memcpy (redo_recdes.data, log_page_p->area + process_lsa.offset, redo_length);
-		      process_lsa.offset += redo_length;
-		      LOG_READ_ALIGN (thread_p, &process_lsa, log_page_p);
-		    }
-		  else if (redo_recdes.type == REC_RELOCATION)
-		    {
-		      index = trid % 1024;
-		      tmp_log = temp_logbuf[index].log_record;
-		      LOG_COPY (&tmp_lsa, &temp_logbuf[index].lsa);
-		      if (tmp_lsa.pageid == process_lsa.pageid)
-			{
-			  LOG_REC_MVCC_UNDOREDO *tmp_mvcc = NULL;
-			  LOG_READ_ADVANCE_WHEN_DOESNT_FIT (thread_p, sizeof (*tmp_mvcc), &tmp_lsa, log_page_p);
-			  tmp_mvcc = (LOG_REC_MVCC_UNDOREDO *) (log_page_p->area + tmp_lsa.offset);
-			  LOG_READ_ADD_ALIGN (thread_p, sizeof (*mvcc_undoredo), &tmp_lsa, log_page_p);
-			  redo_recdes.type = *(INT16) (log_page_p->area + tmp_lsa.offset);
-			  redo_length = (int) GET_ZIP_LEN (tmp_mvcc->undoredo.rlength);
-			  tmp_lsa.offset += sizeof (INT16);
-			  redo_recdes.data = (char *) malloc (redo_length);
-			  memcpy (redo_recdes.data, log_page_p->area + tmp_lsa.offset, redo_length);
-			}
-		      else
-			{
-			  //logpb_fetch_page.. 
-			}
-		    }
-		  else if (redo_recdes.type == REC_BIGONE)
-		    {
-
-		    }
-		  make_dml (thread_p, trid, tran_user, 1, classoid, &undo_recdes, undo_length, &redo_recdes,
-			    redo_length, log_info_entry);
-		}		// undo_recdes == REC_HOME
-	      else if (undo_recdes == REC_BIGONE)
-		{
-		}
-	      else if (undo_recdes == REC_NEWHOME)
-		{
-
-		}
-	      f undo_length = mvcc_undoredo->undoredo.ulength;
-	      if (ZIP_CHECK (undo_length))
-		{
-		  undo_length = (int) GET_ZIP_LEN (undo_length);
-		}
-	      process_lsa.offset += sizeof (INT16);
-	      undo_recdes.data = (char *) malloc (undo_length);
-	      memcpy (undo_recdes.data, log_page_p->area + process_lsa.offset, undo_length);
-	      process_lsa.offset += undo_length;
-	      LOG_READ_ALIGN (thread_p, &process_lsa, log_page_p);
-	      redo_recdes.type = *(INT16 *) (log_page_p->area + process_lsa.offset);
-	      redo_length = mvcc_undoredo->undoredo.rlength;
-	      if (ZIP_CHECK (redo_length))
-		{
-		  redo_length = (int) GET_ZIP_LEN (redo_length);
-		}
-	      process_lsa.offset += sizeof (INT16);
-	      redo_recdes.data = (char *) malloc (redo_length);
-	      memcpy (redo_recdes.data, log_page_p->area + process_lsa.offset, redo_length);
-	      process_lsa.offset += redo_length;
-	      LOG_READ_ALIGN (thread_p, &process_lsa, log_page_p);
-//#if !defined(NDEBUG) && 0     // JOOHOK
-	      _er_log_debug (ARG_FILE_LINE, "rcvindex : %s\n", rv_rcvindex_string (rcvindex));
-	      _er_log_debug (ARG_FILE_LINE, "undo type   : %d , redo type : %d\n", undo_recdes.type, redo_recdes.type);
-	      _er_log_debug (ARG_FILE_LINE, "undo length : %d , redo length : %d\n", undo_length, redo_length);
-//#endif
-	      // make_dml (thread_p, trid, tran_user, 1, classoid, &undo_recdes, undo_length, &redo_recdes, redo_length, log_info_entry);
-
-	      /*record type check */
-	      //log_get_redo_record();
-
-	      /*OID check */
-#endif
-	    }
-	  else if (rcvindex == RVHF_MVCC_INSERT)
-	    {
-//                  redo_recdes.type = *(INT16 *)(log_page_p->area + process_lsa.offset);
-	      int repid_and_flag_bits = 0;
-	      char mvcc_flag;
-	      MVCC_REC_HEADER mvcc_header;
-
-	      int is_zipped = false;
-	      int is_unzipped = false;
-	      LOG_ZIP *log_zip_ptr = NULL;
-	      char *redo_data;
-
-	      redo_length = mvcc_undoredo->undoredo.rlength;
-
-	      if (ZIP_CHECK (redo_length))
-		{
-		  redo_length = (int) GET_ZIP_LEN (redo_length);
-		  is_zipped = true;
-		  /*JOOHOK : is zipped -> unzip */
-		}
-
-	      tmp_ptr = (char *) malloc (redo_length);
-	      if (tmp_ptr == NULL)
-		{
-#if !defined(NDEBUG)		//JOOHOK
-		  _er_log_debug (ARG_FILE_LINE, "in MVCC_INSERT, tmp_ptr alloc failed ");
-#endif
-		}
-
-	      logpb_copy_from_log (thread_p, tmp_ptr, redo_length, &process_lsa, log_page_p);
-
-	      redo_data = tmp_ptr;
-
-	      if (is_zipped && length != 0)
-		{
-		  log_zip_ptr = log_zip_alloc (IO_PAGESIZE);
-		  if (log_zip_ptr == NULL)
-		    {
-#if !defined(NDEBUG)		//JOOHOK
-		      _er_log_debug (ARG_FILE_LINE, "in MVCC_INSERT, log_zip_ptr alloc failed");
-#endif
-		    }
-
-		  is_unzipped = log_unzip (log_zip_ptr, redo_length, tmp_ptr);
-		}
-
-	      if (is_zipped && is_unzipped)
-		{
-		  redo_length = (int) log_zip_ptr->data_length;
-		  redo_data = log_zip_ptr->log_data;
-		}
-
-	      redo_recdes.type = *(INT16 *) redo_data;
-
-	      if (redo_recdes.type == REC_HOME)
-		{
-
-		  redo_recdes.data = (char *) redo_data + sizeof (redo_recdes.type);
-		  redo_recdes.length = redo_length - sizeof (redo_recdes.type);
-		  redo_recdes.area_size = redo_length;
-
-		  tmp_data = (char *) malloc (redo_recdes.length + OR_MVCCID_SIZE + MAX_ALIGNMENT);
-
-		  if (tmp_data == NULL)
-		    {
-#if !defined(NDEBUG)		//JOOHOK
-		      _er_log_debug (ARG_FILE_LINE, "in MVCC_INSERT, tmp_data alloc failed");
-#endif
-		    }
-
-		  tmp_data = PTR_ALIGN (tmp_data, MAX_ALIGNMENT);
-
-		  memcpy (tmp_data, redo_recdes.data, OR_INT_SIZE);
-		  memcpy (tmp_data + OR_CHN_OFFSET, redo_recdes.data + OR_INT_SIZE, OR_INT_SIZE);
-		  memcpy (tmp_data + OR_HEADER_SIZE (redo_recdes.data), redo_recdes.data + OR_INT_SIZE + OR_INT_SIZE,
-			  redo_recdes.length - OR_INT_SIZE - OR_INT_SIZE);
-
-		  redo_recdes.data = tmp_data;
-		  redo_recdes.length =
-		    OR_HEADER_SIZE (redo_recdes.data) + redo_recdes.length - OR_INT_SIZE - OR_INT_SIZE;
-
-#if !defined(NDEBUG) && 0	// JOOHOK
-
-		  _er_log_debug (ARG_FILE_LINE, "rcvindex : %s\n", rv_rcvindex_string (rcvindex));
-		  _er_log_debug (ARG_FILE_LINE, "undo type   :  , redo type : %d\n", redo_recdes.type);
-		  _er_log_debug (ARG_FILE_LINE, "undo length : %d , redo length : %d\n",
-				 mvcc_undoredo->undoredo.ulength, redo_length);
-#endif
-
-		  if (make_dml
-		      (thread_p, trid, tran_user, 0, classoid, NULL, 0, &redo_recdes, redo_length,
-		       log_info_entry) != NO_ERROR)
-		    {
-#if !defined(NDEBUG)		//JOOHOK
-		      _er_log_debug (ARG_FILE_LINE, "In MVCC INSERT, make dml failed ");
-#endif
-		    }
-		}
-#if 0
-	      else if (redo_recdes.type == REC_NEWHOME)
-		{
-		  index = trid % 1024;
-		  temp_logbuf[index].tranid = trid;
-		  LSA_COPY (&temp_logbuf[index].lsa, &cur_log_rec_lsa);
-		}
-#endif
-	      free_and_init (tmp_ptr);
-	      free_and_init (tmp_data);
-	      if (log_zip_ptr != NULL)
-		{
-		  log_zip_free (log_zip_ptr);
-		}
-	    }
-	  else if (rcvindex == RVHF_MVCC_DELETE_REC_HOME || rcvindex == RVHF_MVCC_DELETE_OVERFLOW)
-	    {
-              /*MVCC DELETE HOME */
-	      undo_length = mvcc_undoredo->undoredo.ulength;
-
-	      int is_zipped = false;
-	      int is_unzipped = false;
-	      LOG_ZIP *log_zip_ptr = NULL;
-	      char *undo_data;
-
-	      if (ZIP_CHECK (undo_length))
-		{
-		  undo_length = (int) GET_ZIP_LEN (undo_length);
-		  is_zipped = true;
-		}
-
-	      tmp_ptr = (char *) malloc (undo_length);
-	      if (tmp_ptr == NULL)
-		{
-#if !defined(NDEBUG)		//JOOHOK
-		  _er_log_debug (ARG_FILE_LINE, "in MVCC_DELETE, tmp_ptr alloc failed");
-#endif
-		}
-
-	      logpb_copy_from_log (thread_p, tmp_ptr, undo_length, &process_lsa, log_page_p);
-	      undo_data = tmp_ptr;
-
-	      if (is_zipped && undo_length != 0)
-		{
-		  log_zip_ptr = log_zip_alloc (IO_PAGESIZE);
-		  if (log_zip_ptr == NULL)
-		    {
-#if !defined(NDEBUG)		//JOOHOK
-		      _er_log_debug (ARG_FILE_LINE, "in MVCC_DELETE, log_zip_ptr alloc failed");
-#endif
-		    }
-
-		  is_unzipped = log_unzip (log_zip_ptr, redo_length, tmp_ptr);
-		}
-
-	      if (is_zipped && is_unzipped)
-		{
-		  undo_length = (int) log_zip_ptr->data_length;
-		  undo_data = log_zip_ptr->log_data;
-		}
-
-
-	      undo_recdes.type = *(INT16 *) undo_data;
-	      if (undo_recdes.type == REC_HOME)
-		{
-		  undo_recdes.data = (char *) undo_data + sizeof (undo_recdes.type);
-		  undo_recdes.area_size = undo_length;
-		  undo_recdes.length = undo_length - sizeof (undo_recdes.type);
-
-		  tmp_data = (char *) malloc (undo_recdes.length + MAX_ALIGNMENT);
-		  tmp_data = PTR_ALIGN (tmp_data, MAX_ALIGNMENT);
-		  memcpy (tmp_data, undo_recdes.data, undo_recdes.length);
-		  undo_recdes.data = tmp_data;
-
-#if !defined(NDEBUG) && 0	// JOOHOK
-		  _er_log_debug (ARG_FILE_LINE, "rcvindex : %s\n", rv_rcvindex_string (rcvindex));
-		  _er_log_debug (ARG_FILE_LINE, "undo type   : %d , undo length : %d\n", undo_recdes.type, undo_length);
-#endif
-
-		  if (make_dml
-		      (thread_p, trid, tran_user, 2, classoid, &undo_recdes, undo_length, NULL, 0,
-		       log_info_entry) != NO_ERROR)
-		    {
-#if !defined(NDEBUG)		//JOOHOK
-		      _er_log_debug (ARG_FILE_LINE, "In MVCC_DELETE, make dml failed ");
-#endif
-		      /*JOOHOK : debug logging */
-		    }
-		}
-
-	      free_and_init (tmp_ptr);
-	      free_and_init (tmp_data);
-
-	      if (log_zip_ptr != NULL)
-		{
-		  log_zip_free (log_zip_ptr);
-		}
-	    }
-
-	  /*mvcc_undoredo rec type */
-	  break;
-
-	case LOG_MVCC_UNDO_DATA:
-	  /*RVHF_MVCC_UPDATE_OVERFLOW -> will be stored in tmp_buffer */
-	  break;
-	case LOG_MVCC_REDO_DATA:
-	  break;
-	case LOG_UNDOREDO_DATA:
-	  break;
-	case LOG_UNDO_DATA:
-	  break;
-	case LOG_REDO_DATA:
-	  break;
-	defalut:
+        defalut:
 	  break;
 	}
 
@@ -11533,6 +11299,58 @@ log_reader (void *arg)
 
   return (THREAD_RET_T) - 1;
 }
+
+static int
+log_reader_get_recdes (THREAD_ENTRY *thread_p, TEMPORARY_LOG_BUFFER *temp_logbuf, LOG_LSA * undo_lsa, RECDES * undo_recdes, LOG_LSA * redo_lsa, RECDES * redo_recdes)
+{
+  LOG_RECORD_HEADER *log_rec_hdr = NULL;
+  int tmpbuf_index;
+#if 0
+  char *log_pgbuf[IO_MAX_PAGE_SIZE + MAX_ALIGNMENT];
+  LOG_PAGE * log_page_p = (LOG_PAGE *) PTR_ALIGN (log_pgbuf, MAX_ALIGNMENT);
+
+  if (undo_lsa != NULL)
+  {
+    tmpbuf_index = undo_lsa->pageid % 2;
+    if (temp_logbuf[tmpbuf_index].pageid == undo_lsa->pageid)
+    {
+      log_page_p = temp_logbuf[tmpbuf_index].log_page_p;
+    }
+    else
+    {
+      if (logpb_fetch_page (thread_p, undo_lsa, LOG_CS_SAFE_READER, log_page_p) != NO_ERROR)
+      {
+        assert (false);
+        return -1;
+      }
+    }
+
+    log_rec_hdr = LOG_GET_LOG_RECORD_HEADER (log_page_p, undo_lsa);
+
+    switch (log_rec_hdr->type)
+    {
+      case LOG_SUPPLEMENTAL_INFO :
+        LOG_READ_ADD_ALIGN (thread_p, sizeof(*log_rec_hdr), undo_lsa, log_page_p);
+        LOG_REC_SUPPLEMENT *supplement = (LOG_REC_SUPPLEMENT *) (log_page_p->area + undo_lsa->offset);
+        int length = supplement->length;
+        
+        LOG_READ_ADD_ALIGN (thread_p, sizeof (*supplement), undo_lsa, log_page_p);
+
+        memcpy (undo_recdes->data, log_page_p->area + undo_lsa->offset, length);
+        undo_recdes->length = length; 
+
+        break;
+      case LOG_MVCC_UNDOREDO :
+        break;
+      case LOG_UNDOREDO :
+        break;
+
+    }
+  }
+#endif 
+  return NO_ERROR ;
+}
+
 
 static int
 get_class_oid (THREAD_ENTRY * thread_p, LOG_LSA process_lsa, OID & classoid)
@@ -11686,8 +11504,7 @@ log_reader_initialize ()
 }
 
 static int
-make_dml (THREAD_ENTRY * thread_p, int trid, char *user, int dml_type, OID classoid, RECDES * undo_recdes, int ulength,
-	  RECDES * redo_recdes, int rlength, LOG_INFO_ENTRY * dml_entry)
+make_dml (THREAD_ENTRY * thread_p, int trid, char *user, int dml_type, OID classoid, RECDES * undo_recdes, RECDES * redo_recdes, LOG_INFO_ENTRY * dml_entry)
 {
   /*this is for constructing dml data item */
   int has_pk;
@@ -12244,7 +12061,7 @@ make_timer (time_t at_time, int trid, char *user, LOG_INFO_ENTRY * timer_entry)
 }
 
 static int
-find_tran_user (THREAD_ENTRY * thread_p, LOG_LSA process_lsa, int trid, char **user)
+find_tran_user (THREAD_ENTRY * thread_p, LOG_PAGE * log_page, LOG_LSA process_lsa, int trid, char **user)
 {
   /*find tran user at the end of the transaction  */
   LOG_PAGE *log_page_p = NULL;
